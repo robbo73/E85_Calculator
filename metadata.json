@@ -1,0 +1,6 @@
+{
+  "name": "Ethanol Blender Calculator",
+  "description": "A high-performance calculator for blending 98 RON gasoline and E85 ethanol to achieve target ethanol percentages (E30, E50, E85).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
