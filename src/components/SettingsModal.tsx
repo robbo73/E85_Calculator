@@ -6,6 +6,7 @@
 import React from 'react';
 import { Settings } from '../types';
 import { X, RotateCcw, HelpCircle } from 'lucide-react';
+import { DEFAULT_SETTINGS } from '../defaults';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -13,19 +14,6 @@ interface SettingsModalProps {
   settings: Settings;
   onSave: (settings: Settings) => void;
 }
-
-const DEFAULT_SETTINGS: Settings = {
-  gasEthanol: 5,
-  e85Ethanol: 85,
-  gasPrice: 2.15,
-  e85Price: 1.65,
-  currency: '$',
-  tankCapacity: 60,
-  baseGasName: '98 RON',
-  theme: 'racing',
-  unit: 'L',
-  defaultTargetEthanol: 40,
-};
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
@@ -41,6 +29,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   React.useEffect(() => {
     setLocalSettings({ unit: 'L', ...settings });
   }, [settings]);
+
+  // Close on Escape while the dialog is open.
+  React.useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -62,7 +60,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   return (
-    <div id="settings-modal" className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md transition-opacity overflow-y-auto">
+    <div
+      id="settings-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-modal-title"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md transition-opacity overflow-y-auto"
+    >
       <div className="relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl max-h-[90vh] overflow-y-auto scrollbar-thin scrollbar-thumb-slate-800">
         
         {/* Glow decoration */}
@@ -73,9 +77,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <div className="flex items-center justify-between border-b border-slate-800 pb-4 mb-6">
           <div className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 bg-indigo-500 rounded-full animate-pulse" />
-            <h2 className="text-lg font-bold font-display text-white uppercase tracking-wider">Dashboard Calibration</h2>
+            <h2 id="settings-modal-title" className="text-lg font-bold font-display text-white uppercase tracking-wider">Dashboard Calibration</h2>
           </div>
-          <button 
+          <button
+            type="button"
+            aria-label="Close settings"
             onClick={onClose}
             className="p-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white transition-all cursor-pointer"
           >
@@ -91,11 +97,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             
             {/* Tank Capacity */}
             <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800/60">
-              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider font-display mb-2">
+              <label htmlFor="setting-tank-capacity" className="block text-xs font-semibold text-slate-400 uppercase tracking-wider font-display mb-2">
                 Tank capacity ({localSettings.unit === 'Gal' ? 'Gallons' : localSettings.unit === '%' ? 'Percent' : 'Liters'})
               </label>
               <div className="flex items-center gap-2">
                 <input
+                  id="setting-tank-capacity"
                   type="number"
                   value={localSettings.tankCapacity || ''}
                   onChange={e => handleChange('tankCapacity', Math.max(1, parseFloat(e.target.value) || 0))}
@@ -201,11 +208,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             
             {/* Base Gas Ethanol Content */}
             <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800/60">
-              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider font-display mb-2">
+              <label htmlFor="setting-gas-ethanol" className="block text-xs font-semibold text-slate-400 uppercase tracking-wider font-display mb-2">
                 {localSettings.baseGasName || '98 RON'} Base Ethanol
               </label>
               <div className="flex items-center gap-2">
                 <input
+                  id="setting-gas-ethanol"
                   type="number"
                   value={localSettings.gasEthanol ?? ''}
                   onChange={e => handleChange('gasEthanol', Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
@@ -226,11 +234,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
             {/* E85 actual Ethanol Content */}
             <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800/60">
-              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider font-display mb-2">
+              <label htmlFor="setting-e85-ethanol" className="block text-xs font-semibold text-slate-400 uppercase tracking-wider font-display mb-2">
                 E85 Pump Ethanol
               </label>
               <div className="flex items-center gap-2">
                 <input
+                  id="setting-e85-ethanol"
                   type="number"
                   value={localSettings.e85Ethanol ?? ''}
                   onChange={e => handleChange('e85Ethanol', Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
@@ -247,11 +256,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
             {/* Default Target Ethanol Blend */}
             <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800/60 sm:col-span-2">
-              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider font-display mb-2">
+              <label htmlFor="setting-default-target" className="block text-xs font-semibold text-slate-400 uppercase tracking-wider font-display mb-2">
                 Default Target Ethanol Blend
               </label>
               <div className="flex items-center gap-2">
                 <input
+                  id="setting-default-target"
                   type="number"
                   value={localSettings.defaultTargetEthanol ?? 40}
                   onChange={e => handleChange('defaultTargetEthanol', Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
@@ -291,7 +301,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <option value="A$">A$ (AUD)</option>
                     <option value="€">€ (EUR)</option>
                     <option value="£">£ (GBP)</option>
-                    <option value="kr font-sans">kr (SEK/NOK)</option>
+                    <option value="kr">kr (SEK/NOK)</option>
                   </select>
                 </div>
 

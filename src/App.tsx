@@ -26,46 +26,76 @@ import { MixMode, Settings, CalculationResult, SavedMix } from './types';
 import { calculateBlend, generateShareText, exportToCSV } from './utils';
 import { FuelTankVisualizer } from './components/FuelTankVisualizer';
 import { SettingsModal } from './components/SettingsModal';
+import { DEFAULT_SETTINGS } from './defaults';
 
-const DEFAULT_SETTINGS: Settings = {
-  gasEthanol: 0,
-  e85Ethanol: 85,
-  gasPrice: 2.15,
-  e85Price: 2.25,
-  currency: '$',
-  tankCapacity: 60,
-  baseGasName: '98 RON',
-  theme: 'racing',
-  unit: 'L',
-  defaultTargetEthanol: 40,
-};
+const SETTINGS_KEY = 'ebp_settings';
+const MIXES_KEY = 'ebp_saved_mixes';
+
+/** Reads saved settings, merging over defaults so missing or corrupt fields can't produce NaN. */
+function loadSettings(): Settings {
+  try {
+    const cached = localStorage.getItem(SETTINGS_KEY);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (parsed && typeof parsed === 'object') {
+        const merged: Settings = { ...DEFAULT_SETTINGS, ...parsed };
+        if (!merged.baseGasName) merged.baseGasName = DEFAULT_SETTINGS.baseGasName;
+        if (!merged.theme) merged.theme = DEFAULT_SETTINGS.theme;
+        if (!merged.unit) merged.unit = DEFAULT_SETTINGS.unit;
+        // Migrate a malformed currency value written by an earlier version.
+        if (merged.currency === 'kr font-sans') merged.currency = 'kr';
+        return merged;
+      }
+    }
+  } catch {
+    // Storage blocked or data corrupt: fall back to defaults.
+  }
+  return DEFAULT_SETTINGS;
+}
+
+function loadSavedMixes(): SavedMix[] {
+  try {
+    const cached = localStorage.getItem(MIXES_KEY);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {
+    // Storage blocked or data corrupt: start with an empty log book.
+  }
+  return [];
+}
+
+function saveToStorage(key: string, value: unknown): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Storage full or unavailable (e.g. private mode): the app still works, just without persistence.
+  }
+}
+
+function newId(): string {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : Math.random().toString(36).substring(2, 11);
+}
+
+function downloadFile(content: string, mimeType: string, filename: string): void {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', filename);
+  link.style.visibility = 'hidden';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
 
 export default function App() {
   // --- STATE DECLARATIONS ---
-  const [settings, setSettings] = useState<Settings>(() => {
-    const cached = localStorage.getItem('ebp_settings');
-    if (cached) {
-      try {
-        const parsed = JSON.parse(cached);
-        if (!parsed.baseGasName) {
-          parsed.baseGasName = '98 RON';
-        }
-        if (!parsed.theme) {
-          parsed.theme = 'racing';
-        }
-        if (!parsed.unit) {
-          parsed.unit = 'L';
-        }
-        if (parsed.defaultTargetEthanol === undefined) {
-          parsed.defaultTargetEthanol = 40;
-        }
-        return parsed;
-      } catch (e) {
-        return DEFAULT_SETTINGS;
-      }
-    }
-    return DEFAULT_SETTINGS;
-  });
+  const [settings, setSettings] = useState<Settings>(loadSettings);
 
   const [mixMode, setMixMode] = useState<MixMode>('full');
   
@@ -76,17 +106,7 @@ export default function App() {
   const [customAddLiters, setCustomAddLiters] = useState<number>(20);
   
   // History and exports
-  const [savedMixes, setSavedMixes] = useState<SavedMix[]>(() => {
-    const cached = localStorage.getItem('ebp_saved_mixes');
-    if (cached) {
-      try {
-        return JSON.parse(cached);
-      } catch (e) {
-        return [];
-      }
-    }
-    return [];
-  });
+  const [savedMixes, setSavedMixes] = useState<SavedMix[]>(loadSavedMixes);
 
   // Saving recipe state
   const [recipeName, setRecipeName] = useState<string>('');
@@ -100,19 +120,19 @@ export default function App() {
 
   // --- PERSISTENCE EFFECT HANDLERS ---
   useEffect(() => {
-    localStorage.setItem('ebp_settings', JSON.stringify(settings));
+    saveToStorage(SETTINGS_KEY, settings);
   }, [settings]);
 
   useEffect(() => {
-    localStorage.setItem('ebp_saved_mixes', JSON.stringify(savedMixes));
+    saveToStorage(MIXES_KEY, savedMixes);
   }, [savedMixes]);
 
   // Handle automatic constraints when settings update (e.g. capacity reduces below current fuel)
   useEffect(() => {
     if (mixMode === 'full' && currentLiters > settings.tankCapacity) {
-      setCurrentLiters(Math.min(currentLiters, settings.tankCapacity));
+      setCurrentLiters(settings.tankCapacity);
     }
-  }, [settings, mixMode]);
+  }, [settings.tankCapacity, mixMode, currentLiters]);
 
   // Update active target ethanol when default target changes in calibration modal
   useEffect(() => {
@@ -244,6 +264,10 @@ export default function App() {
 
   const style = themeStyles[currentTheme] || themeStyles.cosmic;
 
+  // Smallest upper bound for the "Add Direct" batch slider, scaled to the selected unit
+  // (20 L is about 5 gal; previously a fixed 20 exceeded a typical 15 gal tank).
+  const minBatchMax = settings.unit === 'Gal' ? 5 : settings.unit === '%' ? 1 : 20;
+
   // Helper to compute percentage for range sliders
   const getSliderPercent = (val: number, min: number, max: number): number => {
     if (max <= min) return 0;
@@ -323,7 +347,7 @@ export default function App() {
 
     const nickname = recipeName.trim() || `E${targetEthanol} Mix (${result.addedLiters.toFixed(0)}${settings.unit})`;
     const newMix: SavedMix = {
-      id: Math.random().toString(36).substring(2, 9),
+      id: newId(),
       name: nickname,
       timestamp: Date.now(),
       mixMode,
@@ -362,8 +386,12 @@ export default function App() {
     }
   };
 
-  const copyToClipboard = (text: string, id: string) => {
-    navigator.clipboard.writeText(text);
+  const copyToClipboard = async (text: string, id: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      return; // Clipboard unavailable or permission denied: don't show a false "Copied!".
+    }
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
   };
@@ -382,33 +410,22 @@ export default function App() {
 
   const handleDownloadCSV = () => {
     const csvContent = exportToCSV(savedMixes, settings.currency, settings.baseGasName || '98 RON', settings.unit);
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `ethanol_blender_mixes_${new Date().toISOString().split('T')[0]}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    downloadFile(csvContent, 'text/csv;charset=utf-8;', `ethanol_blender_mixes_${new Date().toISOString().split('T')[0]}.csv`);
   };
 
   const handleDownloadJSON = () => {
     const jsonContent = JSON.stringify(savedMixes, null, 2);
-    const blob = new Blob([jsonContent], { type: 'application/json;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `ethanol_blender_mixes_${new Date().toISOString().split('T')[0]}.json`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    downloadFile(jsonContent, 'application/json;charset=utf-8;', `ethanol_blender_mixes_${new Date().toISOString().split('T')[0]}.json`);
   };
 
   // Preset quick triggers
-  const targetPresets = [30, 40, 50, 60, 85];
-  const currentPresets = [settings.gasEthanol, 15, 30, 50, 60, 85];
+  // The top preset follows the configured E85 pump ethanol (e.g. E70 in winter) instead of a fixed 85.
+  const targetPresets = Array.from(new Set(
+    [30, 40, 50, 60, settings.e85Ethanol].filter(p => p >= settings.gasEthanol && p <= settings.e85Ethanol)
+  ));
+  const currentPresets = Array.from(new Set(
+    [settings.gasEthanol, 15, 30, 50, 60, settings.e85Ethanol].filter(p => p >= settings.gasEthanol && p <= settings.e85Ethanol)
+  ));
 
   return (
     <div className={style.wrapperBg}>
@@ -803,7 +820,7 @@ export default function App() {
                   </div>
 
                   {(() => {
-                    const maxAdd = settings.unit === '%' ? Math.max(1, settings.tankCapacity - currentLiters) : Math.max(20, settings.tankCapacity - currentLiters);
+                    const maxAdd = Math.max(minBatchMax, settings.tankCapacity - currentLiters);
                     return (
                       <input
                         type="range"
@@ -828,10 +845,7 @@ export default function App() {
                     <span>1 {settings.unit === 'Gal' ? 'Gal' : settings.unit === '%' ? '%' : 'Liter'}</span>
                     <span>Custom jerrycan/mix batch size</span>
                     <span>
-                      {settings.unit === '%' 
-                        ? `${(settings.tankCapacity - currentLiters).toFixed(1)}%` 
-                        : `${Math.max(20, settings.tankCapacity - currentLiters)}${settings.unit}`
-                      } (Empty Space)
+                      {`${Math.max(minBatchMax, settings.tankCapacity - currentLiters).toFixed(1)}${settings.unit}`} (Max batch)
                     </span>
                   </div>
                 </motion.div>

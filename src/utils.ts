@@ -5,8 +5,11 @@
 
 import { CalculationResult, MixMode, Settings } from './types';
 
+/** Volumes closer than this (in the working unit) to a boundary are treated as exactly on it. */
+const EPS = 1e-9;
+
 /**
- * Calculates the exact amounts of 98 RON gas and E85 required.
+ * Calculates the exact amounts of base pump gas (e.g. 98 RON) and E85 required.
  */
 export function calculateBlend(
   mode: MixMode,
@@ -21,6 +24,7 @@ export function calculateBlend(
   const E_gas = settings.gasEthanol / 100;
   const E_e85 = settings.e85Ethanol / 100;
   const V_curr = Math.max(0, currentLiters);
+  const gasName = settings.baseGasName || '98 RON';
 
   // Initialize result
   const result: CalculationResult = {
@@ -122,7 +126,11 @@ export function calculateBlend(
     // V_e85 * (E_e85 - E_gas) = V_final * E_target - V_curr * E_curr - V_add * E_gas
     const nominator = (V_final * E_target) - (V_curr * E_curr) - (V_add * E_gas);
     const denominator = E_e85 - E_gas;
-    const V_e85_calc = nominator / denominator;
+    const V_e85_raw = nominator / denominator;
+    // Snap floating-point noise at the boundaries (e.g. a pure E85 or pure gas fill)
+    // so an exactly reachable target is not rejected as "unreachable".
+    const V_e85_calc =
+      Math.abs(V_e85_raw) < EPS ? 0 : Math.abs(V_e85_raw - V_add) < EPS ? V_add : V_e85_raw;
     const V_gas_calc = V_add - V_e85_calc;
 
     // Boundary calculations for beautiful UX suggestions
@@ -134,7 +142,7 @@ export function calculateBlend(
       result.gasLiters = V_add;
       result.e85Liters = 0;
       const unitLabel = settings.unit || 'L';
-      result.errorMessage = `Target E${targetEthanol} is unreachable. The current tank already contains too much ethanol. Even if you fill the remaining ${V_add.toFixed(1)}${unitLabel} with pure 98 RON, the lowest percentage you can reach is E${Math.round(minPossibleEth * 100)}.`;
+      result.errorMessage = `Target E${targetEthanol} is unreachable. The current tank already contains too much ethanol. Even if you fill the remaining ${V_add.toFixed(1)}${unitLabel} with pure ${gasName}, the lowest percentage you can reach is E${Math.round(minPossibleEth * 100)}.`;
       return result;
     }
 
@@ -165,10 +173,15 @@ export function calculateBlend(
       return result;
     }
 
-    // Checking if final tank size exceeds settings.tankCapacity as a warning (not a failure)
+    // The final volume may exceed settings.tankCapacity on purpose: this mode is also used to
+    // mix a batch in a separate container (e.g. a jerrycan), so it is not treated as a failure.
     const nominator = (V_final * E_target) - (V_curr * E_curr) - (V_add * E_gas);
     const denominator = E_e85 - E_gas;
-    const V_e85_calc = nominator / denominator;
+    const V_e85_raw = nominator / denominator;
+    // Snap floating-point noise at the boundaries (e.g. a pure E85 or pure gas fill)
+    // so an exactly reachable target is not rejected as "unreachable".
+    const V_e85_calc =
+      Math.abs(V_e85_raw) < EPS ? 0 : Math.abs(V_e85_raw - V_add) < EPS ? V_add : V_e85_raw;
     const V_gas_calc = V_add - V_e85_calc;
 
     const maxPossibleEth = ((V_curr * E_curr) + (V_add * E_e85)) / V_final;
@@ -179,7 +192,7 @@ export function calculateBlend(
       result.gasLiters = V_add;
       result.e85Liters = 0;
       const unitLabel = settings.unit || 'L';
-      result.errorMessage = `Unreachable target blend. To add precisely ${V_add}${unitLabel} and hit E${targetEthanol}, your starting fuel needs more ethanol. By adding 100% 98 RON, the lowest mix you can reach is E${Math.round(minPossibleEth * 100)}.`;
+      result.errorMessage = `Unreachable target blend. To add precisely ${V_add}${unitLabel} and hit E${targetEthanol}, your starting fuel needs more ethanol. By adding 100% ${gasName}, the lowest mix you can reach is E${Math.round(minPossibleEth * 100)}.`;
       return result;
     }
 
@@ -255,7 +268,7 @@ export function calculateBlend(
       // Must add 98 RON gas only
       if (E_target <= E_gas) {
         result.isPossible = false;
-        result.errorMessage = `Target E${targetEthanol} is too low. Your 98 RON contains ${settings.gasEthanol}% ethanol. You cannot dilute the tank down to or below E${settings.gasEthanol}% by adding 98 RON fuel.`;
+        result.errorMessage = `Target E${targetEthanol} is too low. Your ${gasName} contains ${settings.gasEthanol}% ethanol. You cannot dilute the tank down to or below E${settings.gasEthanol}% by adding ${gasName} fuel.`;
         return result;
       }
 
@@ -309,6 +322,11 @@ export function generateShareText(
     ? `\n🧪 EST. OCTANE: ${result.blendedOctane.toFixed(1)} RON\n📊 BREAKDOWN: ${result.gasRatioPercent?.toFixed(1)}% ${gasName} | ${result.e85RatioPercent?.toFixed(1)}% E85`
     : '';
 
+  const instructions = [
+    result.e85Liters > 0 ? `• Add ${result.e85Liters.toFixed(2)} ${unitFullLabel} of E85` : '',
+    result.gasLiters > 0 ? `• Add ${result.gasLiters.toFixed(2)} ${unitFullLabel} of ${gasName}` : '',
+  ].filter(Boolean).join('\n') || '• No fuel needs to be added';
+
   const notesSection = notes ? `\n📝 NOTES: ${notes}` : '';
   const costSection = result.totalCost 
     ? `\n💰 EST. COST: ${currency}${result.totalCost.toFixed(2)}` + 
@@ -324,14 +342,22 @@ export function generateShareText(
 🎯 Target blend: E${result.targetEthanol}${octaneSection}
 ----------------------------------------
 👉 INSTRUCTIONS:
-${result.e85Liters > 0 ? `• Add ${result.e85Liters.toFixed(2)} ${unitFullLabel} of E85 (${result.e85Liters.toFixed(1)}${unitLabel})` : ''}
-${result.gasLiters > 0 ? `• Add ${result.gasLiters.toFixed(2)} ${unitFullLabel} of ${gasName} (${result.gasLiters.toFixed(1)}${unitLabel})` : ''}
+${instructions}
 ----------------------------------------
 📦 Total Added: ${result.addedLiters.toFixed(2)} ${unitFullLabel}
 🧪 Final Fuel Volume: ${result.targetLiters.toFixed(2)} ${unitFullLabel} of E${result.targetEthanol}${costSection}${notesSection}
 ----------------------------------------
 Calculated at ${new Date().toLocaleDateString()} via Ethanol Blender Pro.
 `;
+}
+
+/**
+ * Quotes a free-text CSV field. Values starting with =, +, - or @ are prefixed with a
+ * single quote so spreadsheet apps show them as text instead of running them as formulas.
+ */
+function csvText(value: string): string {
+  const safe = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  return `"${safe.replace(/"/g, '""')}"`;
 }
 
 /**
@@ -364,7 +390,7 @@ export function exportToCSV(savedMixes: any[], currency: string = '$', gasName: 
       'Single-Fuel Topup';
       
     return [
-      `"${mix.name.replace(/"/g, '""')}"`,
+      csvText(mix.name),
       `"${dateStr}"`,
       `"${modeLabel}"`,
       mix.currentLiters.toFixed(1),
@@ -373,11 +399,11 @@ export function exportToCSV(savedMixes: any[], currency: string = '$', gasName: 
       mix.addedLiters.toFixed(1),
       mix.gasLiters.toFixed(2),
       mix.e85Liters.toFixed(2),
-      mix.blendedOctane ? mix.blendedOctane.toFixed(1) : 'N/A',
-      mix.gasRatioPercent ? mix.gasRatioPercent.toFixed(1) : 'N/A',
-      mix.e85RatioPercent ? mix.e85RatioPercent.toFixed(1) : 'N/A',
-      mix.totalCost ? `${currency}${mix.totalCost.toFixed(2)}` : 'N/A',
-      `"${(mix.notes || '').replace(/"/g, '""')}"`
+      mix.blendedOctane != null ? mix.blendedOctane.toFixed(1) : 'N/A',
+      mix.gasRatioPercent != null ? mix.gasRatioPercent.toFixed(1) : 'N/A',
+      mix.e85RatioPercent != null ? mix.e85RatioPercent.toFixed(1) : 'N/A',
+      mix.totalCost != null ? csvText(`${currency}${mix.totalCost.toFixed(2)}`) : 'N/A',
+      csvText(mix.notes || '')
     ];
   });
 
